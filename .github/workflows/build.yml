@@ -1,0 +1,327 @@
+# Builds Mosaic for Linux (x64, arm64, 32-bit x86, 32-bit ARM), Windows (x64, 32-bit x86, ARM64), macOS (universal),
+# Android (arm64-v8a, armeabi-v7a, x86_64, x86) and iOS (unsigned .ipa), then publishes them as a GitHub Release
+# together with a ready-made downloads.json, which the release job also commits to the website
+# (web/downloads/downloads.json) so the download page links the new version by itself.
+#   Run it:   Actions tab -> "build" -> Run workflow   (builds only)
+#   Release:  git tag v1.3.0 && git push --tags          (builds, then publishes the release)
+# NOTE: written without being able to run the Qt, Windows, 32-bit and iOS jobs. Expect to tweak versions or
+# package names on the first run. The 32-bit desktop jobs use the Rust shell in shell-rs/ (no Qt) because Qt's
+# web engine and prebuilt kits are 64-bit only; they test themselves and check the architecture of the result.
+# iOS: the .ipa is built WITHOUT code signing. It has to be re-signed (AltStore, Sideloadly, TrollStore, Xcode)
+# before it can be installed. When there are signing certificates, build with Xcode signing instead.
+name: build
+on:
+  workflow_dispatch: {}
+  push: { tags: ['v*'] }
+permissions: { contents: write }
+env:
+  QT_VERSION: '6.8.1'
+jobs:
+  linux:
+    strategy:
+      fail-fast: false
+      matrix: { include: [ { os: ubuntu-24.04, arch: x64, appimage: x86_64 }, { os: ubuntu-24.04-arm, arch: arm64, appimage: aarch64 } ] }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Qt and tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake ninja-build file libfuse2t64 \
+            qt6-base-dev qt6-declarative-dev qt6-webview-dev qt6-webengine-dev qt6-tools-dev \
+            qml6-module-qtquick qml6-module-qtquick-window qml6-module-qtwebview qml6-module-qtqml-workerscript \
+            qml6-module-qtquick-templates qml6-module-qtquick-layouts qml6-module-qtquick-controls qml6-module-qtquick-dialogs
+      - name: Build
+        run: |
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr
+          cmake --build build
+          DESTDIR=$PWD/AppDir cmake --install build
+      - name: Make the AppImage
+        run: |
+          A=${{ matrix.appimage }}
+          curl -sSL -o linuxdeploy https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-$A.AppImage
+          curl -sSL -o linuxdeploy-qt https://github.com/linuxdeploy/linuxdeploy-plugin-qt/releases/download/continuous/linuxdeploy-plugin-qt-$A.AppImage
+          chmod +x linuxdeploy linuxdeploy-qt
+          export QMAKE=$(command -v qmake6) EXTRA_QT_MODULES="webenginecore;webview" APPIMAGE_EXTRACT_AND_RUN=1 LINUXDEPLOY_OUTPUT_VERSION=${{ github.ref_name }}
+          cp web/icon-512.png mosaic.png
+          ./linuxdeploy --appdir AppDir -d platform/linux/mosaic.desktop -i mosaic.png --plugin qt --output appimage
+          mv Mosaic*.AppImage Mosaic-linux-${{ matrix.arch }}.AppImage
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Mosaic-linux-${{ matrix.arch }}
+          path: Mosaic-linux-${{ matrix.arch }}.AppImage
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: jurplel/install-qt-action@v4
+        with:
+          version: '${{ env.QT_VERSION }}'
+          host: windows
+          target: desktop
+          arch: win64_msvc2022_64
+          modules: 'qtwebengine qtwebview qtpositioning qtwebchannel'
+          cache: true
+      - uses: ilammy/msvc-dev-cmd@v1
+      - name: Build
+        run: |
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+          cmake --build build
+      - name: Bundle and zip
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force dist/Mosaic | Out-Null
+          Copy-Item build/Mosaic.exe dist/Mosaic/
+          windeployqt --release --qmldir qml dist/Mosaic/Mosaic.exe
+          Compress-Archive -Path dist/Mosaic -DestinationPath Mosaic-windows-x64.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Mosaic-windows-x64
+          path: Mosaic-windows-x64.zip
+  macos:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - uses: jurplel/install-qt-action@v4
+        with:
+          version: '${{ env.QT_VERSION }}'
+          host: mac
+          target: desktop
+          arch: clang_64
+          modules: 'qtwebview'
+          cache: true
+      - name: "Build (universal, Apple silicon and Intel)"
+        run: |
+          brew install ninja
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64" -DCMAKE_OSX_DEPLOYMENT_TARGET=12.0
+          cmake --build build
+          macdeployqt build/Mosaic.app -qmldir=qml -dmg
+          mv build/Mosaic.dmg Mosaic-macos-universal.dmg
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Mosaic-macos-universal
+          path: Mosaic-macos-universal.dmg
+  android:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { abi: arm64-v8a, qt: android_arm64_v8a }
+          - { abi: armeabi-v7a, qt: android_armv7 }
+          - { abi: x86_64, qt: android_x86_64 }
+          - { abi: x86, qt: android_x86 }
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Qt for the build machine (needed as host tools)
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: '${{ env.QT_VERSION }}'
+          host: linux
+          target: desktop
+          arch: linux_gcc_64
+          dir: '${{ runner.temp }}/qt'
+          cache: true
+      - name: Qt for Android
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: '${{ env.QT_VERSION }}'
+          host: linux
+          target: android
+          arch: '${{ matrix.qt }}'
+          modules: qtwebview
+          dir: '${{ runner.temp }}/qt'
+          set-env: false
+          cache: true
+      - name: Android NDK
+        run: echo "y" | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager "ndk;26.1.10909125" "platforms;android-34" "build-tools;34.0.0"
+      - name: Build the APK
+        run: |
+          Q=${{ runner.temp }}/qt/Qt/${{ env.QT_VERSION }}
+          export ANDROID_NDK_ROOT=$ANDROID_HOME/ndk/26.1.10909125
+          $Q/${{ matrix.qt }}/bin/qt-cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
+            -DQT_HOST_PATH=$Q/gcc_64 -DANDROID_SDK_ROOT=$ANDROID_HOME -DANDROID_NDK_ROOT=$ANDROID_NDK_ROOT \
+            -DQT_ANDROID_ABIS=${{ matrix.abi }}
+          cmake --build build --target apk
+          cp "$(find build -name '*.apk' | head -n1)" Mosaic-android-${{ matrix.abi }}.apk
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Mosaic-android-${{ matrix.abi }}
+          path: Mosaic-android-${{ matrix.abi }}.apk
+  windows-shell:
+    # 32-bit (x86) and ARM64 Windows. Uses the Rust shell + the Microsoft WebView2 runtime that Windows 10/11 ship.
+    # The runner is a 64-bit Intel PC: it can run (and so test) the x86 build, but only cross-compiles ARM64.
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { arch: x86,   target: i686-pc-windows-msvc,    machine: '0x14c',  runnable: true }
+          - { arch: arm64, target: aarch64-pc-windows-msvc, machine: '0xaa64', runnable: false }
+    runs-on: windows-latest
+    defaults: { run: { shell: bash } }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            shell-rs/target
+          key: shell-rs-win-${{ matrix.arch }}-${{ hashFiles('shell-rs/Cargo.lock') }}
+      - name: Rust for ${{ matrix.target }}
+        run: |
+          rustup toolchain install stable --profile minimal --target ${{ matrix.target }}
+          rustup default stable
+          rustc -vV
+      - name: Test (runs as a 32-bit program)
+        if: matrix.runnable
+        working-directory: shell-rs
+        run: cargo test --locked --target ${{ matrix.target }}
+      - name: Build
+        working-directory: shell-rs
+        run: cargo build --release --locked --target ${{ matrix.target }}
+      - name: Check the CPU type of the result
+        working-directory: shell-rs
+        run: |
+          python - "target/${{ matrix.target }}/release/Mosaic.exe" "${{ matrix.machine }}" <<'PY'
+          import struct, sys
+          d = open(sys.argv[1], 'rb').read(4096)
+          off = struct.unpack_from('<I', d, 0x3c)[0]
+          machine = struct.unpack_from('<H', d, off + 4)[0]
+          print('PE machine type:', hex(machine), 'expected', sys.argv[2])
+          sys.exit(0 if machine == int(sys.argv[2], 16) else 1)
+          PY
+      - name: Check that the server answers
+        if: matrix.runnable
+        working-directory: shell-rs
+        run: |
+          "target/${{ matrix.target }}/release/Mosaic.exe" --serve &
+          sleep 5
+          bash packaging/smoke.sh
+          taskkill //F //IM Mosaic.exe || true
+      - name: Zip
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force dist/Mosaic | Out-Null
+          Copy-Item "shell-rs/target/${{ matrix.target }}/release/Mosaic.exe" dist/Mosaic/
+          Compress-Archive -Path dist/Mosaic -DestinationPath "Mosaic-windows-${{ matrix.arch }}.zip"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Mosaic-windows-${{ matrix.arch }}
+          path: Mosaic-windows-${{ matrix.arch }}.zip
+  linux-32:
+    # 32-bit Linux as .deb packages (Debian, Ubuntu, Raspberry Pi OS). Built inside a 32-bit Debian container
+    # so the result links against the 32-bit WebKitGTK. The ARM build runs under QEMU and is slow (about an hour).
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { arch: x86, deb: i386,  platform: linux/386,    rust: i686-unknown-linux-gnu,        tests: '1', gui: '1', run: 'linux32 bash', lto: 'true' }
+          - { arch: arm, deb: armhf, platform: linux/arm/v7, rust: armv7-unknown-linux-gnueabihf, tests: '0', gui: '0', run: 'bash',        lto: 'false' }
+    runs-on: ubuntu-24.04
+    timeout-minutes: 300
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-qemu-action@v3
+        if: matrix.arch == 'arm'
+      - name: Build, test and package in a 32-bit Debian
+        run: |
+          mkdir -p dist
+          VERSION="${GITHUB_REF_NAME#v}"; case "$GITHUB_REF" in refs/tags/v*) ;; *) VERSION="";; esac
+          docker run --rm --platform ${{ matrix.platform }} -v "$PWD:/src" -w /src \
+            -e CI_INSTALL=1 -e DEB_ARCH=${{ matrix.deb }} -e RUST_HOST=${{ matrix.rust }} -e VERSION="$VERSION" \
+            -e RUN_TESTS=${{ matrix.tests }} -e GUI_SMOKE=${{ matrix.gui }} -e OUT_DIR=/src/dist \
+            -e CARGO_PROFILE_RELEASE_LTO=${{ matrix.lto }} \
+            debian:bookworm ${{ matrix.run }} /src/shell-rs/packaging/ci-linux32.sh
+          ls -la dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Mosaic-linux-${{ matrix.arch }}-deb
+          path: dist/*.deb
+  ios-unsigned:
+    # iPhone/iPad app without code signing. Needs re-signing before it installs (see the note at the top).
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - name: Qt for the build machine (needed as host tools)
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: '${{ env.QT_VERSION }}'
+          host: mac
+          target: desktop
+          arch: clang_64
+          dir: '${{ runner.temp }}/qt'
+          cache: true
+      - name: Qt for iOS
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: '${{ env.QT_VERSION }}'
+          host: mac
+          target: ios
+          arch: ios
+          modules: qtwebview
+          dir: '${{ runner.temp }}/qt'
+          set-env: false
+          cache: true
+      - name: Build the unsigned .ipa
+        run: |
+          Q=${{ runner.temp }}/qt/Qt/${{ env.QT_VERSION }}
+          QT_IOS=$Q/ios QT_HOST=$Q/macos bash platform/ios/build-unsigned-ipa.sh "$PWD/Mosaic-ios-unsigned.ipa"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Mosaic-ios-unsigned
+          path: Mosaic-ios-unsigned.ipa
+  release:
+    # Runs for tags only: attaches every build to a GitHub Release, then updates the website's download page.
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [linux, windows, macos, android, windows-shell, linux-32, ios-unsigned]
+    runs-on: ubuntu-24.04
+    env:
+      # Optional: also update a SEPARATE website repository. Set the repository variable SITE_REPO ("owner/name")
+      # and the secret SITE_REPO_TOKEN (a token that can push to it). SITE_DOWNLOADS_PATH defaults to downloads/downloads.json.
+      SITE_TOKEN: ${{ secrets.SITE_REPO_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Write downloads.json for the website
+        run: python3 .github/scripts/make-downloads.py "${GITHUB_REF_NAME#v}" "https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}" dist > dist/downloads.json
+      - name: Checksums
+        working-directory: dist
+        run: |
+          find . -maxdepth 1 -type f ! -name downloads.json -printf '%f\n' | sort | xargs sha256sum > ../SHA256SUMS.txt
+          mv ../SHA256SUMS.txt SHA256SUMS.txt
+          cat SHA256SUMS.txt
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          generate_release_notes: true
+      # The release exists now, so the links in downloads.json work. Push the file to the website so the
+      # download page offers the new version (the site redeploys on push, e.g. Netlify or GitHub Pages).
+      - name: Website in this repository
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          path: site
+      - name: Update web/downloads/downloads.json here
+        run: |
+          bash .github/scripts/publish-downloads.sh dist/downloads.json site web/downloads/downloads.json "Download page for ${GITHUB_REF_NAME}"
+      - name: Website in a separate repository (optional)
+        if: ${{ vars.SITE_REPO != '' && env.SITE_TOKEN != '' }}
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ vars.SITE_REPO }}
+          token: ${{ secrets.SITE_REPO_TOKEN }}
+          path: site2
+      - name: Update downloads.json in the separate repository
+        if: ${{ vars.SITE_REPO != '' && env.SITE_TOKEN != '' }}
+        env:
+          DEST: ${{ vars.SITE_DOWNLOADS_PATH || 'downloads/downloads.json' }}
+        run: |
+          bash .github/scripts/publish-downloads.sh dist/downloads.json site2 "$DEST" "Download page for ${GITHUB_REF_NAME}"

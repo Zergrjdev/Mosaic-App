@@ -1,0 +1,4 @@
+shell-rs/target/
+build/
+build-*/
+*.ipa

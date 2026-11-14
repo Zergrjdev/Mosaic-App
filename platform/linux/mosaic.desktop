@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Mosaic
+Comment=Design your entire game in one place
+Exec=Mosaic
+Icon=mosaic
+Categories=Graphics;Office;
+Terminal=false

@@ -1,0 +1,5 @@
+# Keep Unix line endings for scripts and workflows, even when committed from Windows.
+*.sh   text eol=lf
+*.py   text eol=lf
+*.yml  text eol=lf
+*.toml text eol=lf

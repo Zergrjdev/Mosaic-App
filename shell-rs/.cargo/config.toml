@@ -1,0 +1,3 @@
+# Windows: link the C runtime statically so Mosaic.exe runs without installing the Visual C++ redistributable.
+[target.'cfg(all(windows, target_env = "msvc"))']
+rustflags = ["-C", "target-feature=+crt-static"]
