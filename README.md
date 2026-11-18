@@ -170,6 +170,10 @@ Push this project to a GitHub repository. `.github/workflows/build.yml` builds, 
 ### Notes
 - Tags decide the file names of the `.deb` packages (`mosaic_<tag without v>_i386.deb`) and the links the page builds, so no manual
   version step is needed; the version in `shell-rs/Cargo.toml` is only what the app reports about itself, keep it roughly in step.
+- The Linux AppImage jobs run `platform/linux/check-appimage.sh` on the finished file: it starts the app on a virtual screen and fails
+  unless the server answers, the QML interface loads, Qt finds its web view plugin and the page is actually drawn. (A bundle that
+  builds fine but is missing the QML modules or the web view plugin starts and then shows an empty window, so a build-only check
+  cannot catch it.) A screenshot of what it drew is kept as the `appimage-screenshot-*` artifact of the run.
 - The 32-bit ARM `.deb` is built under QEMU and takes about an hour; it targets ARMv7 (Raspberry Pi 2 and newer on a 32-bit OS,
   not the Pi Zero or Pi 1). Windows ARM64 is only cross-compiled (the runner is an Intel PC), so it is checked for CPU type, not run.
 - After editing anything in `web/`, run `python3 .github/scripts/rehash.py web` so the `?v=` cache hashes match the files.
