@@ -58,7 +58,9 @@ if(IOS)
     qt_import_qml_plugins(Mosaic)
 endif()
 
+# On Android, Qt builds the app as a shared library (a CMake "module" target), which needs a LIBRARY destination.
 install(TARGETS Mosaic
     BUNDLE DESTINATION .
     RUNTIME DESTINATION bin
+    LIBRARY DESTINATION lib
 )

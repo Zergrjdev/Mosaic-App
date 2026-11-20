@@ -23,11 +23,11 @@ jobs:
       matrix: { include: [ { os: ubuntu-24.04, arch: x64, appimage: x86_64 }, { os: ubuntu-24.04-arm, arch: arm64, appimage: aarch64 } ] }
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Install Qt and tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y cmake ninja-build file libfuse2t64 \
+          sudo apt-get install -y cmake ninja-build file libfuse2t64 patchelf xvfb imagemagick \
             qt6-base-dev qt6-declarative-dev qt6-webview-dev qt6-webengine-dev qt6-tools-dev \
             qml6-module-qtquick qml6-module-qtquick-window qml6-module-qtwebview qml6-module-qtqml-workerscript \
             qml6-module-qtquick-templates qml6-module-qtquick-layouts qml6-module-qtquick-controls qml6-module-qtquick-dialogs
@@ -39,13 +39,36 @@ jobs:
       - name: Make the AppImage
         run: |
           A=${{ matrix.appimage }}
-          curl -sSL -o linuxdeploy https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-$A.AppImage
-          curl -sSL -o linuxdeploy-qt https://github.com/linuxdeploy/linuxdeploy-plugin-qt/releases/download/continuous/linuxdeploy-plugin-qt-$A.AppImage
-          chmod +x linuxdeploy linuxdeploy-qt
-          export QMAKE=$(command -v qmake6) EXTRA_QT_MODULES="webenginecore;webview" APPIMAGE_EXTRACT_AND_RUN=1 LINUXDEPLOY_OUTPUT_VERSION=${{ github.ref_name }}
+          # linuxdeploy only finds its Qt plugin when the file is called linuxdeploy-plugin-qt-<arch>.AppImage
+          # and sits in PATH or next to it.
+          curl -sSL -o linuxdeploy-$A.AppImage https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-$A.AppImage
+          curl -sSL -o linuxdeploy-plugin-qt-$A.AppImage https://github.com/linuxdeploy/linuxdeploy-plugin-qt/releases/download/continuous/linuxdeploy-plugin-qt-$A.AppImage
+          chmod +x linuxdeploy-*.AppImage
+          # QML_SOURCES_PATHS tells the plugin which QML modules Mosaic imports (QtWebView, Dialogs, ...). Without it the
+          # AppImage builds fine but does not start ("module QtWebView is not installed").
+          # EXTRA_QT_MODULES bundles Qt WebEngine, which QtWebView loads at run time (lower-case names are required).
+          export PATH="$PWD:$PATH" QML_SOURCES_PATHS="$PWD/qml" QMAKE=$(command -v qmake6) EXTRA_QT_MODULES="webenginecore;webview" APPIMAGE_EXTRACT_AND_RUN=1 LINUXDEPLOY_OUTPUT_VERSION=${{ github.ref_name }}
           cp web/icon-512.png mosaic.png
-          ./linuxdeploy --appdir AppDir -d platform/linux/mosaic.desktop -i mosaic.png --plugin qt --output appimage
+          # pass 1: bundle Qt, the QML modules and WebEngine
+          ./linuxdeploy-$A.AppImage --appdir AppDir -d platform/linux/mosaic.desktop -i mosaic.png --plugin qt
+          # The Qt plugin does not know the web view backend plugin, so Qt would report "No WebView plug-in found!" and
+          # draw nothing. Add it by hand and let it find the bundled libraries.
+          PLUGINS=$("$QMAKE" -query QT_INSTALL_PLUGINS)
+          mkdir -p AppDir/usr/plugins/webview
+          cp "$PLUGINS"/webview/*.so AppDir/usr/plugins/webview/
+          patchelf --set-rpath '$ORIGIN/../../lib' AppDir/usr/plugins/webview/*.so
+          # pass 2: package
+          ./linuxdeploy-$A.AppImage --appdir AppDir --output appimage
           mv Mosaic*.AppImage Mosaic-linux-${{ matrix.arch }}.AppImage
+      - name: Check the AppImage really works (starts, loads the interface, draws the page)
+        run: bash platform/linux/check-appimage.sh Mosaic-linux-${{ matrix.arch }}.AppImage appimage-screenshot.png
+      - name: Keep the screenshot, to see what the AppImage drew
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: appimage-screenshot-${{ matrix.arch }}
+          path: appimage-screenshot.png
+          if-no-files-found: ignore
       - uses: actions/upload-artifact@v4
         with:
           name: Mosaic-linux-${{ matrix.arch }}
@@ -53,7 +76,7 @@ jobs:
   windows:
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: jurplel/install-qt-action@v4
         with:
           version: '${{ env.QT_VERSION }}'
@@ -79,9 +102,9 @@ jobs:
           name: Mosaic-windows-x64
           path: Mosaic-windows-x64.zip
   macos:
-    runs-on: macos-14
+    runs-on: macos-15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: jurplel/install-qt-action@v4
         with:
           version: '${{ env.QT_VERSION }}'
@@ -112,8 +135,8 @@ jobs:
           - { abi: x86, qt: android_x86 }
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-java@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: '17'
@@ -130,24 +153,54 @@ jobs:
         uses: jurplel/install-qt-action@v4
         with:
           version: '${{ env.QT_VERSION }}'
-          host: linux
+          host: all_os            # Qt 6.7+ publishes the Android kits under "all_os", not "linux"
           target: android
           arch: '${{ matrix.qt }}'
           modules: qtwebview
           dir: '${{ runner.temp }}/qt'
           set-env: false
           cache: true
+          aqtversion: '>=3.2.1'   # "all_os" needs aqtinstall 3.2+, which also needs a newer py7zr than the action's default
+          py7zrversion: '>=0.22.0'
       - name: Android NDK
         run: echo "y" | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager "ndk;26.1.10909125" "platforms;android-34" "build-tools;34.0.0"
+      - name: Signing key for the APK
+        # Android only installs signed apps. Add the repository secrets ANDROID_KEYSTORE_BASE64, ANDROID_KEYSTORE_ALIAS and
+        # ANDROID_KEYSTORE_PASSWORD (your own key, so updates install over older versions). Without them a throwaway key is
+        # made for every build: the APK installs, but an update signed with a different key cannot replace it.
+        env:
+          KS_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          KS_ALIAS: ${{ secrets.ANDROID_KEYSTORE_ALIAS }}
+          KS_PASS: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+        run: |
+          KS="$RUNNER_TEMP/mosaic.jks"
+          if [ -n "$KS_B64" ]; then
+            echo "$KS_B64" | base64 -d > "$KS"
+          else
+            echo "::warning::No Android signing secrets set: signing with a throwaway key (see the comment in build.yml)."
+            KS_ALIAS=mosaic; KS_PASS=mosaic-ci
+            keytool -genkeypair -keystore "$KS" -storetype PKCS12 -storepass "$KS_PASS" -keypass "$KS_PASS" -alias "$KS_ALIAS" \
+              -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Mosaic CI, O=Mosaic"
+          fi
+          {
+            echo "QT_ANDROID_KEYSTORE_PATH=$KS"
+            echo "QT_ANDROID_KEYSTORE_ALIAS=$KS_ALIAS"
+            echo "QT_ANDROID_KEYSTORE_STORE_PASS=$KS_PASS"
+            echo "QT_ANDROID_KEYSTORE_KEY_PASS=$KS_PASS"
+          } >> "$GITHUB_ENV"
       - name: Build the APK
         run: |
           Q=${{ runner.temp }}/qt/Qt/${{ env.QT_VERSION }}
           export ANDROID_NDK_ROOT=$ANDROID_HOME/ndk/26.1.10909125
+          # The Qt archives can lose the "executable" bit (qt-cmake: Permission denied), so set it again.
+          chmod -R +x "$Q/${{ matrix.qt }}/bin" "$Q/gcc_64/bin" "$Q/gcc_64/libexec" 2>/dev/null || true
           $Q/${{ matrix.qt }}/bin/qt-cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
             -DQT_HOST_PATH=$Q/gcc_64 -DANDROID_SDK_ROOT=$ANDROID_HOME -DANDROID_NDK_ROOT=$ANDROID_NDK_ROOT \
-            -DQT_ANDROID_ABIS=${{ matrix.abi }}
+            -DQT_ANDROID_ABIS=${{ matrix.abi }} -DQT_ANDROID_SIGN_APK=ON
           cmake --build build --target apk
-          cp "$(find build -name '*.apk' | head -n1)" Mosaic-android-${{ matrix.abi }}.apk
+          APK="$(find build -name '*.apk' ! -name '*unsigned*' | head -n1)"
+          if [ -z "$APK" ]; then echo "No signed APK was produced. Found:"; find build -name '*.apk'; exit 1; fi
+          cp "$APK" Mosaic-android-${{ matrix.abi }}.apk
       - uses: actions/upload-artifact@v4
         with:
           name: Mosaic-android-${{ matrix.abi }}
@@ -164,7 +217,7 @@ jobs:
     runs-on: windows-latest
     defaults: { run: { shell: bash } }
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: actions/cache@v4
         with:
           path: |
@@ -225,7 +278,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 300
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: docker/setup-qemu-action@v3
         if: matrix.arch == 'arm'
       - name: Build, test and package in a 32-bit Debian
@@ -244,9 +297,9 @@ jobs:
           path: dist/*.deb
   ios-unsigned:
     # iPhone/iPad app without code signing. Needs re-signing before it installs (see the note at the top).
-    runs-on: macos-14
+    runs-on: macos-15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Qt for the build machine (needed as host tools)
         uses: jurplel/install-qt-action@v4
         with:
@@ -285,10 +338,11 @@ jobs:
       # and the secret SITE_REPO_TOKEN (a token that can push to it). SITE_DOWNLOADS_PATH defaults to downloads/downloads.json.
       SITE_TOKEN: ${{ secrets.SITE_REPO_TOKEN }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: actions/download-artifact@v4
         with:
           path: dist
+          pattern: Mosaic-*          # the builds only (not the AppImage screenshots)
           merge-multiple: true
       - name: Write downloads.json for the website
         run: python3 .github/scripts/make-downloads.py "${GITHUB_REF_NAME#v}" "https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}" dist > dist/downloads.json
@@ -305,7 +359,7 @@ jobs:
       # The release exists now, so the links in downloads.json work. Push the file to the website so the
       # download page offers the new version (the site redeploys on push, e.g. Netlify or GitHub Pages).
       - name: Website in this repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           ref: ${{ github.event.repository.default_branch }}
           path: site
@@ -314,7 +368,7 @@ jobs:
           bash .github/scripts/publish-downloads.sh dist/downloads.json site web/downloads/downloads.json "Download page for ${GITHUB_REF_NAME}"
       - name: Website in a separate repository (optional)
         if: ${{ vars.SITE_REPO != '' && env.SITE_TOKEN != '' }}
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           repository: ${{ vars.SITE_REPO }}
           token: ${{ secrets.SITE_REPO_TOKEN }}
