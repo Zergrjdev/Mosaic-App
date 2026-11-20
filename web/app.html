@@ -1,5 +1,22 @@
 <!doctype html>
 <html lang="en"><head><meta charset="utf-8">
+<style id="bootcss">
+html{background:#222}html[data-t=light]{background:#eceef3}
+#boot{position:fixed;inset:0;z-index:299;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:20px;background:#222;color:#ececec;font:600 22px/1 ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;letter-spacing:-.01em;transition:opacity .25s ease}
+html[data-t=light] #boot{background:#eceef3;color:#191b24}
+#boot.out{opacity:0;pointer-events:none}
+#boot .bm{display:flex;align-items:center;gap:12px}
+#boot .mk{display:grid;grid-template-columns:1fr 1fr;gap:4px;width:34px;height:34px}
+#boot .mk i{border-radius:50%;background:#b85c5c;animation:bootdot 1.1s ease-in-out infinite}
+#boot .mk i:nth-child(2){animation-delay:.14s}#boot .mk i:nth-child(4){animation-delay:.28s}#boot .mk i:nth-child(3){animation-delay:.42s}
+#boot p{margin:0;font:400 13px/1.4 ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;letter-spacing:0;color:#9a9ea8;opacity:0;animation:bootslow .4s 6s forwards}
+html[data-t=light] #boot p{color:#7b7f90}
+@keyframes bootdot{0%,100%{opacity:.25;transform:scale(.8)}50%{opacity:1;transform:scale(1)}}
+@keyframes bootslow{to{opacity:1}}
+html.booting #xa.wait{display:none}
+@media(prefers-reduced-motion:reduce){#boot{transition:none}#boot .mk i{animation:none}#boot .mk i:nth-child(2){opacity:.7}#boot .mk i:nth-child(3){opacity:.45}#boot .mk i:nth-child(4){opacity:.85}}
+</style><noscript><style>#boot{display:none}</style></noscript>
+<script src="js/boot.js?v=8a329c2d"></script>
 <meta name="viewport" content="width=device-width,initial-scale=1,minimum-scale=1,viewport-fit=cover">
 <link rel="icon" href="favicon.ico" sizes="48x48"><link rel="icon" href="favicon-32.png" type="image/png" sizes="32x32"><link rel="apple-touch-icon" href="apple-touch-icon.png"><link rel="manifest" href="manifest.webmanifest"><meta name="theme-color" content="#5b5bf0"><meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' blob:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com data:; img-src 'self' data: blob: https:; media-src 'self' data: blob: https:; connect-src 'self' https://*.supabase.co wss://*.supabase.co https://discord.com https://discordapp.com https://fonts.googleapis.com http://127.0.0.1:* http://localhost:* https:; base-uri 'self'; form-action 'self'; object-src 'none'"><meta name="referrer" content="strict-origin-when-cross-origin"><meta name="robots" content="noindex"><script src="js/01.js?v=bafefd6b"></script>
 <link rel="stylesheet" href="fonts/fonts.css?v=71943813"><title>Mosaic · workspace</title>
@@ -196,7 +213,8 @@ body:not([data-pt=excal]) #tools :is([data-a=laser],[data-a=zen],[data-a=grid]){
 body.zen :is(#tools,#insp,header,aside,#zoom,#tabs,#emp,#kb){display:none!important}#zx{position:fixed;top:12px;right:12px;z-index:90;display:none}body.zen #zx{display:block}
 #xgb{position:fixed;left:50%;bottom:16px;transform:translateX(-50%);background:var(--pn);color:var(--tx);border:1px solid var(--bd);border-radius:99px;padding:9px 18px;font-size:13px;z-index:120;box-shadow:var(--sh)}#xgb a{color:var(--ac);font-weight:600}.xnl{margin-left:14px;color:var(--mu);text-decoration:none;font-size:14px}.xnl:hover{color:var(--tx)}</style><link rel="stylesheet" href="ui.css?v=77406af7">
 </head>
-<body><noscript><p style="font:16px system-ui;padding:40px;max-width:520px;margin:auto">Mosaic needs JavaScript to run. Please turn it on in your browser settings and reload.</p></noscript><div id="app">
+<body>
+<div id="boot" role="status" aria-live="polite" aria-label="Loading Mosaic"><div class="bm"><span class="mk" aria-hidden="true"><i></i><i></i><i></i><i></i></span><span>Mosaic</span></div><p>This is taking longer than usual…</p></div><noscript><p style="font:16px system-ui;padding:40px;max-width:520px;margin:auto">Mosaic needs JavaScript to run. Please turn it on in your browser settings and reload.</p></noscript><div id="app">
 <aside id="sd"><div class="brand"><i></i><input id="pn" aria-label="Project name (also the room code)" placeholder="Project name" spellcheck="false" maxlength="40"></div>
 <div class="row"><button id="nb">＋ Board</button><button id="nd">＋ Doc</button><button id="nt">＋ Table</button></div>
 <div class="row"><button id="nf">＋ Design</button><button id="nw">＋ Whiteboard</button></div><div id="pl"></div><button id="th"></button></aside>
@@ -241,7 +259,7 @@ body.zen :is(#tools,#insp,header,aside,#zoom,#tabs,#emp,#kb){display:none!import
 .pc .pn{font-size:17px;font-weight:650;color:var(--tx);text-decoration:none;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.pc .pn:hover{color:var(--ac)}
 .pc small{color:var(--mu)}.pc .ac{display:flex;gap:6px;margin-top:4px}.pc .ac button{font-size:12px;padding:3px 9px}
 .rl{align-self:flex-start;font-size:11px;font-weight:700;padding:2px 8px;border-radius:99px}.rl.ow{background:#dcfae6;color:#067647}.rl.ed{background:#e0e7ff;color:#3538cd}.rl.rd{background:#fef0c7;color:#93370d}
-#xh .em{color:var(--mu)}.xg .em{grid-column:1/-1;margin:0}#xh .sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)}#xhb{text-align:left;margin-bottom:6px}</style><script src="js/core.js?v=88f95a57"></script><script src="js/13.js?v=10f5e1bf"></script><script src="js/14.js?v=8cebc446"></script><script src="js/gamedesign.js?v=c2b2c09d"></script><script src="js/ui.js?v=b266efcd"></script><script src="js/settings.js?v=f4790f8f"></script><script src="js/15.js?v=8754f950"></script><script src="js/16.js?v=43b3686c"></script><script src="js/store.js?v=321f29d7"></script><style>
+#xh .em{color:var(--mu)}.xg .em{grid-column:1/-1;margin:0}#xh .sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)}#xhb{text-align:left;margin-bottom:6px}</style><script src="js/core.js?v=88f95a57"></script><script src="js/13.js?v=372c1593"></script><script src="js/14.js?v=8cebc446"></script><script src="js/gamedesign.js?v=c2b2c09d"></script><script src="js/ui.js?v=b266efcd"></script><script src="js/settings.js?v=f4790f8f"></script><script src="js/15.js?v=8754f950"></script><script src="js/16.js?v=43b3686c"></script><script src="js/store.js?v=321f29d7"></script><style>
 #clb{display:none!important}
 #xm{position:fixed;inset:0;z-index:400;background:#0008;display:flex;align-items:center;justify-content:center;padding:16px}#xm[hidden]{display:none}
 .mb{background:var(--pn);color:var(--tx);border:1px solid var(--bd);border-radius:16px;box-shadow:var(--sh);width:min(640px,100%);max-height:88vh;display:flex;flex-direction:column}
