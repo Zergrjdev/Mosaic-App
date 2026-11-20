@@ -174,6 +174,11 @@ Push this project to a GitHub repository. `.github/workflows/build.yml` builds, 
   unless the server answers, the QML interface loads, Qt finds its web view plugin and the page is actually drawn. (A bundle that
   builds fine but is missing the QML modules or the web view plugin starts and then shows an empty window, so a build-only check
   cannot catch it.) A screenshot of what it drew is kept as the `appimage-screenshot-*` artifact of the run.
+- Android APKs are signed in CI, because Android refuses unsigned apps. Without setup a throwaway key is made for each build (the APK
+  installs, but a later build signed with a different key cannot update it). To keep one key, create a keystore once
+  (`keytool -genkeypair -keystore mosaic.jks -alias mosaic -keyalg RSA -keysize 2048 -validity 10000`), then add the repository
+  secrets `ANDROID_KEYSTORE_BASE64` (`base64 -w0 mosaic.jks`), `ANDROID_KEYSTORE_ALIAS` and `ANDROID_KEYSTORE_PASSWORD`
+  (use the same password for the store and the key). Keep a safe copy of `mosaic.jks`: losing it means users must uninstall to update.
 - The 32-bit ARM `.deb` is built under QEMU and takes about an hour; it targets ARMv7 (Raspberry Pi 2 and newer on a 32-bit OS,
   not the Pi Zero or Pi 1). Windows ARM64 is only cross-compiled (the runner is an Intel PC), so it is checked for CPU type, not run.
 - After editing anything in `web/`, run `python3 .github/scripts/rehash.py web` so the `?v=` cache hashes match the files.
