@@ -16,6 +16,9 @@ on:
 permissions: { contents: write }
 env:
   QT_VERSION: '6.8.1'
+  # Run every JavaScript action on Node 24 (Node 20 is deprecated on GitHub Actions). This also covers actions that
+  # have not published a Node 24 release yet (jurplel/install-qt-action, ilammy/msvc-dev-cmd).
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
 jobs:
   linux:
     strategy:
@@ -49,27 +52,34 @@ jobs:
           # EXTRA_QT_MODULES bundles Qt WebEngine, which QtWebView loads at run time (lower-case names are required).
           export PATH="$PWD:$PATH" QML_SOURCES_PATHS="$PWD/qml" QMAKE=$(command -v qmake6) EXTRA_QT_MODULES="webenginecore;webview" APPIMAGE_EXTRACT_AND_RUN=1 LINUXDEPLOY_OUTPUT_VERSION=${{ github.ref_name }}
           cp web/icon-512.png mosaic.png
+          # Do NOT bundle NSS/NSPR (Chromium's crypto libraries). Chromium also loads libsoftokn3 from the *system* at run
+          # time, so a bundled (older) libnssutil3 clashes with a newer system one and the app dies on rolling distros:
+          #   libnssutil3.so: version `NSSUTIL_3.108' not found (required by /usr/lib/libsoftokn3.so)
+          # Using the machine's own NSS avoids the mismatch. NSS is present on practically every desktop.
+          NSS=(); for l in nss3 nssutil3 smime3 ssl3 softokn3 freebl3 freeblpriv3 nssckbi nssdbm3 nspr4 plc4 plds4; do NSS+=(--exclude-library "lib$l.so*"); done
           # pass 1: bundle Qt, the QML modules and WebEngine
-          ./linuxdeploy-$A.AppImage --appdir AppDir -d platform/linux/mosaic.desktop -i mosaic.png --plugin qt
+          ./linuxdeploy-$A.AppImage --appdir AppDir -d platform/linux/mosaic.desktop -i mosaic.png --plugin qt "${NSS[@]}"
           # The Qt plugin does not know the web view backend plugin, so Qt would report "No WebView plug-in found!" and
           # draw nothing. Add it by hand and let it find the bundled libraries.
           PLUGINS=$("$QMAKE" -query QT_INSTALL_PLUGINS)
           mkdir -p AppDir/usr/plugins/webview
           cp "$PLUGINS"/webview/*.so AppDir/usr/plugins/webview/
           patchelf --set-rpath '$ORIGIN/../../lib' AppDir/usr/plugins/webview/*.so
+          # belt and braces: if any NSS/NSPR library still got bundled, remove it
+          find AppDir/usr/lib -maxdepth 1 -regextype posix-extended -regex '.*/lib(nss3|nssutil3|smime3|ssl3|softokn3|freebl3|freeblpriv3|nssckbi|nssdbm3|nspr4|plc4|plds4)\.so.*' -print -delete
           # pass 2: package
-          ./linuxdeploy-$A.AppImage --appdir AppDir --output appimage
+          ./linuxdeploy-$A.AppImage --appdir AppDir --output appimage "${NSS[@]}"
           mv Mosaic*.AppImage Mosaic-linux-${{ matrix.arch }}.AppImage
       - name: Check the AppImage really works (starts, loads the interface, draws the page)
         run: bash platform/linux/check-appimage.sh Mosaic-linux-${{ matrix.arch }}.AppImage appimage-screenshot.png
       - name: Keep the screenshot, to see what the AppImage drew
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: appimage-screenshot-${{ matrix.arch }}
           path: appimage-screenshot.png
           if-no-files-found: ignore
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: Mosaic-linux-${{ matrix.arch }}
           path: Mosaic-linux-${{ matrix.arch }}.AppImage
@@ -97,7 +107,7 @@ jobs:
           Copy-Item build/Mosaic.exe dist/Mosaic/
           windeployqt --release --qmldir qml dist/Mosaic/Mosaic.exe
           Compress-Archive -Path dist/Mosaic -DestinationPath Mosaic-windows-x64.zip
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: Mosaic-windows-x64
           path: Mosaic-windows-x64.zip
@@ -120,7 +130,7 @@ jobs:
           cmake --build build
           macdeployqt build/Mosaic.app -qmldir=qml -dmg
           mv build/Mosaic.dmg Mosaic-macos-universal.dmg
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: Mosaic-macos-universal
           path: Mosaic-macos-universal.dmg
@@ -201,7 +211,7 @@ jobs:
           APK="$(find build -name '*.apk' ! -name '*unsigned*' | head -n1)"
           if [ -z "$APK" ]; then echo "No signed APK was produced. Found:"; find build -name '*.apk'; exit 1; fi
           cp "$APK" Mosaic-android-${{ matrix.abi }}.apk
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: Mosaic-android-${{ matrix.abi }}
           path: Mosaic-android-${{ matrix.abi }}.apk
@@ -218,7 +228,7 @@ jobs:
     defaults: { run: { shell: bash } }
     steps:
       - uses: actions/checkout@v5
-      - uses: actions/cache@v4
+      - uses: actions/cache@v6
         with:
           path: |
             ~/.cargo/registry
@@ -262,7 +272,7 @@ jobs:
           New-Item -ItemType Directory -Force dist/Mosaic | Out-Null
           Copy-Item "shell-rs/target/${{ matrix.target }}/release/Mosaic.exe" dist/Mosaic/
           Compress-Archive -Path dist/Mosaic -DestinationPath "Mosaic-windows-${{ matrix.arch }}.zip"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: Mosaic-windows-${{ matrix.arch }}
           path: Mosaic-windows-${{ matrix.arch }}.zip
@@ -279,7 +289,7 @@ jobs:
     timeout-minutes: 300
     steps:
       - uses: actions/checkout@v5
-      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-qemu-action@v4
         if: matrix.arch == 'arm'
       - name: Build, test and package in a 32-bit Debian
         run: |
@@ -291,7 +301,7 @@ jobs:
             -e CARGO_PROFILE_RELEASE_LTO=${{ matrix.lto }} \
             debian:bookworm ${{ matrix.run }} /src/shell-rs/packaging/ci-linux32.sh
           ls -la dist
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: Mosaic-linux-${{ matrix.arch }}-deb
           path: dist/*.deb
@@ -324,7 +334,7 @@ jobs:
         run: |
           Q=${{ runner.temp }}/qt/Qt/${{ env.QT_VERSION }}
           QT_IOS=$Q/ios QT_HOST=$Q/macos bash platform/ios/build-unsigned-ipa.sh "$PWD/Mosaic-ios-unsigned.ipa"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: Mosaic-ios-unsigned
           path: Mosaic-ios-unsigned.ipa
@@ -339,7 +349,7 @@ jobs:
       SITE_TOKEN: ${{ secrets.SITE_REPO_TOKEN }}
     steps:
       - uses: actions/checkout@v5
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           path: dist
           pattern: Mosaic-*          # the builds only (not the AppImage screenshots)
@@ -352,7 +362,7 @@ jobs:
           find . -maxdepth 1 -type f ! -name downloads.json -printf '%f\n' | sort | xargs sha256sum > ../SHA256SUMS.txt
           mv ../SHA256SUMS.txt SHA256SUMS.txt
           cat SHA256SUMS.txt
-      - uses: softprops/action-gh-release@v2
+      - uses: softprops/action-gh-release@v3
         with:
           files: dist/*
           generate_release_notes: true
